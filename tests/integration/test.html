@@ -1,0 +1,37 @@
+<script src="../../node_modules/vuex/dist/vuex.global.js"></script>
+<script src="../../node_modules/vue/dist/vue.global.js"></script>
+<script type="module">
+    console.log("import component Test");
+    import Test from "../../src/components/Test.js";
+
+    console.log("createApp");
+    const app				= Vue.createApp({
+        created () {
+            window.$root		= this;
+        },
+        data () {
+            return {};
+        },
+    });
+
+    console.log("init component", "more args work now?");
+    const component			= Test();
+
+    console.log("add component");
+    app.component( "test", component );
+
+    console.log("mount app");
+    app.mount("#app");
+
+    console.log("import store");
+    import init_store from "../../src/store.js";
+    import { Client } from "../../src/mock_client.js";
+
+    const client			= new Client();
+    const store				= init_store( Vuex, client );
+    app.use( store );
+</script>
+
+<div id="app">
+    <test ref="component" input="park"></test>
+</div>
