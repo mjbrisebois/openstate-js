@@ -8,8 +8,7 @@ const { v4: uuid }			= require('uuid');
 const { createModWC,
 	...ModWC }			= require('../../src/main.js');
 
-if ( process.env.LOG_LEVEL )
-    ModWC.logging( process.env.LOG_LEVEL.replace("silly", "trace") );
+ModWC.logging( process.env.LOG_LEVEL ? process.env.LOG_LEVEL.replace("silly", "trace") : "error" );
 
 const delay				= ms => new Promise(f => setTimeout(f, ms));
 
@@ -50,7 +49,7 @@ modwc.addHandlers({
 
 	    return Object.assign( {}, database[ id ] );
 	},
-	defaultValue () {
+	defaultMutable () {
 	    return {
 		"message": "default message",
 	    };

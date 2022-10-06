@@ -1,9 +1,11 @@
 'use strict'
 
 const { Logger }			= require('@whi/weblogger');
-const log				= new Logger("metastate", "fatal");
+const log				= new Logger("modwc");
 
 const { walk, ...objwalk }		= require('@whi/object-walk');
+
+const DEADEND				= Symbol(); // inactive, dormant, idle, passive, lifeless, uninhabited, static, nothing, none, nil
 
 
 function serialize ( value, indent, ordered = true ) {
@@ -37,6 +39,8 @@ function isSerializable ( target ) {
     if ( target === undefined )
 	return false;
     else if ( target === null || ["string", "number", "boolean"].includes( typeof target ) )
+	return true;
+    else if ( typeof target.toJSON === "function" )
 	return true;
     else if ( !["Object", "Array"].includes( target.constructor.name ) )
 	return false;
@@ -134,16 +138,18 @@ const MetastateProperties		= {
     // validity
     "valid":		false, // correct
     "invalid":		true,
+    "failed":		false,
 };
 const computed_states			= [
     "current",
 ];
 
 function checkChange ( modwc, path, benchmark ) {
+    const metastate			= modwc.metastate[ path ];
     const current			= serialize( modwc.mutable[ path ] );
 
     // console.log("Comparing before/after states:\n      current: %s\n    benchmark: %s", current, benchmark );
-    modwc.metastate[ path ].changed	= current !== benchmark;
+    metastate.changed		= current !== benchmark;
 }
 
 function checkValidity ( modwc, path, data ) {
@@ -154,7 +160,7 @@ function checkValidity ( modwc, path, data ) {
     errors.length			= 0;
 
     try {
-	handler.validate( data, errors );
+	handler.validate( path, data, errors );
     } catch (err) {
 	console.error("Failed during validation of '%s'", path, err );
 	throw err;
@@ -176,21 +182,23 @@ function onchange ( target, path, modwc, callback, target_benchmark ) {
     }
 
     return new Proxy( target, {
-	set ( target, prop, value, receiver ) {
+	set ( target, prop, value ) {
 	    if ( !isSerializable( value ) )
 		throw new TypeError(`Cannot set '${prop}' to type '${value.constructor.name}'; Mutable values must be compatible with JSON serialization`);
+
+	    value			= clone( value );
 
 	    if ( typeof value === "object" && value !== null )
 		value			= onchange( value, path, modwc, callback, target_benchmark );
 
 	    // console.log("Change (set) detected for '%s' on target:", prop, target );
 	    try {
-		return Reflect.set( target, prop, value, receiver );
+		return Reflect.set( target, prop, value );
 	    } finally {
 		callback({ target_benchmark, target, modwc, path });
 	    }
 	},
-	deleteProperty ( target, prop, receiver ) {
+	deleteProperty ( target, prop ) {
 	    // console.log("Change (delete) detected for '%s' on target:", prop, target );
 
 	    try {
@@ -202,30 +210,34 @@ function onchange ( target, path, modwc, callback, target_benchmark ) {
     });
 }
 
-const METASTATE_PROP_CONTROLLER		= {
-    set ( target, prop, value, receiver ) {
-	target[ prop ]			= value;
-
-	if ( ["present", "expired"].includes( prop ) )
-	    receiver.current		= receiver.present && !receiver.expired;
-
-	return Reflect.set(...arguments);
-    },
-};
 
 
 function MetastateDB ( db, modwc ) {
     return new Proxy( db, {
-	get ( target, path, receiver ) {
+	get ( target, path ) {
 	    if ( isSpecialProp( path ) )
 		return Reflect.get(...arguments);
 
 	    if ( target[ path ] === undefined ) {
 		const handler		= modwc.getPathHandler( path );
-		receiver[ path ]	= new Proxy( Object.assign( {}, MetastateProperties ), METASTATE_PROP_CONTROLLER );
+		target[ path ]		= new Proxy( Object.assign( {}, MetastateProperties ), {
+		    set ( target, prop, value ) {
+			if ( value === target[ prop ] )
+			    return true;
+
+			target[ prop ]			= value;
+
+			if ( ["present", "expired"].includes( prop ) )
+			    target.current		= target.present && !target.expired;
+
+			modwc.emit( path, "metastate", prop, value );
+
+			return true;
+		    },
+		});
 
 		if ( handler.readonly )
-		    receiver[ path ].writable	= false;
+		    target[ path ].writable	= false;
 	    }
 
 	    return Reflect.get(...arguments);
@@ -235,7 +247,7 @@ function MetastateDB ( db, modwc ) {
 
 function MutableDB ( db, modwc ) {
     return new Proxy( db, {
-	get ( target, path, receiver ) {
+	get ( target, path ) {
 	    if ( isSpecialProp( path ) )
 		return Reflect.get(...arguments);
 
@@ -246,30 +258,47 @@ function MutableDB ( db, modwc ) {
 		if ( metastate.writable === false )
 		    throw new Error(`Cannot create a mutable version of ${path} because it is not writable`);
 
-		const mutable			= handler.toMutable( modwc.state[ path ] || handler.defaultValue() );
+		const state			= modwc.state[ path ];
+
+		log.level.debug && !state && log.info("No state for path '%s'; must use default value", path );
+		const mutable			= state
+		      ? handler.toMutable( state )
+		      : handler.defaultMutable( path );
+
+		if ( state === undefined )
+		    modwc.metastate[ path ].changed	= true;
 
 		checkValidity( modwc, path, clone(mutable) );
 
-		receiver[ path ]		= onchange( mutable, path, modwc, ({ target_benchmark }) => {
-		    checkChange( modwc, path, target_benchmark );
+		target[ path ]			= onchange( mutable, path, modwc, ({ target_benchmark }) => {
+		    if ( state !== undefined )
+			checkChange( modwc, path, target_benchmark );
+
 		    checkValidity( modwc, path, clone(mutable) );
+		    modwc.emit( path, "mutable" );
 		});
 	    }
 
 	    return Reflect.get(...arguments);
+	},
+	deleteProperty ( target, path ) {
+	    const metastate			= modwc.metastate[ path ];
+	    metastate.changed			= false;
+
+	    return Reflect.deleteProperty(...arguments);
 	},
     });
 }
 
 function ErrorsDB ( db, modwc ) {
     return new Proxy( db, {
-	get ( target, path, receiver ) {
+	get ( target, path ) {
 	    if ( isSpecialProp( path ) )
 		return Reflect.get(...arguments);
 
 	    if ( target[ path ] === undefined ) {
 		const errors			= [];
-		receiver[ path ]		= onchange( errors, path, modwc, () => {
+		target[ path ]			= onchange( errors, path, modwc, () => {
 		    const valid				= errors.length === 0;
 		    modwc.metastate[ path ].valid	= valid;
 		    modwc.metastate[ path ].invalid	= !valid;
@@ -283,7 +312,7 @@ function ErrorsDB ( db, modwc ) {
 
 function StateDB ( db, modwc ) {
     return new Proxy( db, {
-	set ( target, path, value, receiver ) {
+	set ( target, path, value ) {
 	    const handler		= modwc.getPathHandler( path );
 
 	    if ( !value.__adapted__ ) {
@@ -296,26 +325,28 @@ function StateDB ( db, modwc ) {
 
 	    target[ path ]		= value;
 
-	    const metastate		= modwc.metastate[path];
+	    const metastate		= modwc.metastate[ path ];
 
 	    metastate.present		= true;
 
 	    if ( handler.readonly )
 		metastate.writable	= false;
 
-	    handler.readable( value ).then( readable => {
+	    handler.readable( value, path ).then( readable => {
 		if ( readable === undefined )
 		    return;
 		metastate.readable	= !!readable;
 	    }).catch(err => console.error(err));
 
-	    handler.writable( value ).then( writable => {
+	    handler.writable( value, path ).then( writable => {
 		if ( writable === undefined )
 		    return;
 		metastate.writable	= !!writable;
 	    }).catch(err => console.error(err));
 
-	    return Reflect.set(...arguments);
+	    modwc.emit( path, "state" );
+
+	    return true;
 	},
     });
 }
@@ -324,8 +355,10 @@ function StateDB ( db, modwc ) {
 class Handler {
     constructor ( name, config, modwc ) {
 	this.name			= name;
-	this.path			= config.path.replace(/^\//, "");
 	this.config			= config;
+	this.context			= modwc;
+
+	this.path			= config.path.replace(/^\//, "");
 	this.regex_template		= this.path.replace(/(:[a-zA-Z_]+[^/])/g, "%" );
 	this.regex			= new RegExp( "^\/?" + this.path.replace(/(:[a-zA-Z_]+[^/])/g, (x,g) => `(?<${g.slice(1)}>[^/]+)` ) + "$", "i" );
 	this.__async_validation_p	= Promise.resolve();
@@ -338,8 +371,6 @@ class Handler {
 
 	this.create			= config.create.bind( modwc );
 	this.update			= config.update.bind( modwc );
-
-	this.context			= modwc;
     }
 
     async readable ( value ) {
@@ -352,7 +383,7 @@ class Handler {
 	return await this.config.permissions.readable.call( this.context, value );
     }
 
-    async writable ( value ) {
+    async writable ( value, path ) {
 	if ( !this.config.permissions )
 	    return;
 
@@ -362,10 +393,11 @@ class Handler {
 	return await this.config.permissions.writable.call( this.context, value );
     }
 
-    defaultValue () {
-	return this.config.defaultValue
-	    ? this.config.defaultValue()
-	    : {};
+    defaultMutable ( path ) {
+	if ( !this.config.defaultMutable )
+	    throw new Error(`No default value for handler ${this}`);
+
+	return this.config.defaultMutable( path );
     }
 
     toMutable ( origin ) {
@@ -400,10 +432,13 @@ class Handler {
 	    this.config.adapter( data );
     }
 
-    validate ( data, errors ) {
+    validate ( path, data, errors ) {
+	const metastate			= this.context.metastate[ path ];
+	const type			= metastate.present ? "update" : "create";
+
 	if ( this.config.validation ) {
 	    const sync_errors		= [];
-	    this.config.validation( data, sync_errors );
+	    this.config.validation( data, sync_errors, type );
 
 	    log.debug("Adding %s sync errors", sync_errors.length );
 	    errors.splice( 0, errors.length, ...sync_errors );
@@ -411,7 +446,7 @@ class Handler {
 
 	if ( this.config.asyncValidation ) {
 	    const async_errors		= [];
-	    const async_promise		= this.config.asyncValidation( data, async_errors )
+	    const async_promise		= this.config.asyncValidation( data, async_errors, type )
 		.catch(err => console.error(err));
 
 	    async_promise.then(() => {
@@ -435,23 +470,68 @@ class Handler {
 
 
 class ModWC {
+    static DEADEND			= DEADEND;
+
     constructor ({ reactive, strict = true } = {}, handlers ) {
 	this._handlers			= [];
+	this._readings			= {};
 	this.strict			= !!strict;
+	this.DEADEND			= DEADEND;
 
 	if ( handlers )
 	    this.addHandlers( handlers );
 
+	Object.defineProperties( this, {
+	    "__metastate": {
+		"value": {
+		    [DEADEND]: {
+			"present":	false,
+			"current":	false,
+			"changed":	false,
+			"readable":	false,
+			"writable":	false,
+
+			"reading":	false,
+			"writing":	false,
+
+			"cached":	false,
+			"expired":	false,
+
+			"valid":	false,
+			"invalid":	true,
+		    },
+		},
+	    },
+	    "__state": {
+		"value": {
+		    [DEADEND]: null,
+		},
+	    },
+	    "__mutable": {
+		"value": {
+		    [DEADEND]: Object.freeze({}),
+		},
+	    },
+	    "__errors": {
+		"value": {
+		    [DEADEND]: [],
+		},
+	    },
+	    "__listeners": {
+		"value": {},
+	    },
+	});
+
 	if ( reactive ) {
-	    this.metastate		= reactive( MetastateDB( {}, this ) );
-	    this.state			= reactive( StateDB( {}, this ) );
-	    this.mutable		= reactive( MutableDB( {}, this ) );
-	    this.errors			= reactive( ErrorsDB( {}, this ) );
+	    this.metastate		= reactive( MetastateDB( this.__metastate, this ) );
+	    this.state			= reactive( StateDB( this.__state, this ) );
+	    this.mutable		= reactive( MutableDB( this.__mutable, this ) );
+	    this.errors			= reactive( ErrorsDB( this.__errors, this ) );
 	} else {
-	    this.metastate		= MetastateDB( {}, this );
-	    this.state			= StateDB( {}, this );
-	    this.mutable		= MutableDB( {}, this );
-	    this.errors			= ErrorsDB( {}, this );
+	    this.metastate		= MetastateDB( this.__metastate, this );
+	    this.state			= StateDB( this.__state, this );
+	    this.mutable		= MutableDB( this.__mutable, this );
+	    this.errors			= ErrorsDB( this.__errors, this );
 	}
     }
 
@@ -469,6 +549,31 @@ class ModWC {
 	}
     }
 
+    on ( path, callback ) {
+	if ( typeof callback !== "function" )
+	    throw new TypeError(`Event callback for path '${path}' must be a function; not type '${typeof callback}'`);
+
+	if ( this.__listeners[ path ] === undefined )
+	    this.__listeners[ path ]	= [];
+
+	this.__listeners[ path ].push( callback );
+    }
+
+    emit ( path, event_name, ...args ) {
+	// TODO: Should implement a global emitter that supports pattern regex matching for paths
+
+	if ( this.__listeners[ path ] === undefined )
+	    return;
+
+	this.__listeners[ path ].forEach( callback => {
+	    try {
+		callback( event_name, ...args );
+	    } catch ( err ) {
+		console.error( err );
+	    }
+	});
+    }
+
     getPathHandler ( path ) {
 	// console.log("getPathHandler( %s )", path );
 	const handler		= this._handlers.find( handler => handler.isMatch( path ) );
@@ -484,6 +589,22 @@ class ModWC {
 	return handler.__async_validation_p;
     }
 
+    purge ( path ) {
+	delete this.metastate[ path ];
+	delete this.state[ path ];
+	delete this.mutable[ path ];
+	delete this.errors[ path ];
+	delete this.__listeners[ path ];
+    }
+
+    resetMutable ( path ) {
+	delete this.mutable[ path ];
+
+	this.metastate[ path ].failed	= false;
+
+	return this.mutable[ path ];
+    }
+
     async get ( path ) {
 	return this.state[ path ]
 	    ? this.state[path]
@@ -494,26 +615,41 @@ class ModWC {
 	const metastate			= this.metastate[ path ];
 	const handler			= this.getPathHandler( path );
 
-	metastate.reading		= true;
+	if ( metastate.reading ) {
+	    log.debug("Duplicate read request for '%s'", path );
+	    return await this._readings[ path ];
+	}
 
-	const result			= await handler.read( handler.parsePath( path ), path );
+	metastate.reading		= true;
+	this._readings[ path ]		= handler.read( handler.parsePath( path ), path );
+
+	const result			= await this._readings[ path ];
 
 	metastate.reading		= false;
+	delete this._readings[ path ];
 
 	if ( !result )
 	    throw new Error(`Read returned not found: ${result}`);
 
+	if ( this.state[ path ] )
+	    log.info("Result from read of path '%s' will replace current state", path );
+
+	log.trace("Saving read result for '%s':", path, result );
 	this.state[ path ]		= result;
 
-	if ( metastate.changed !== false )
+	if ( metastate.changed !== false ) {
+	    log.warn("New state's mutable value cannot be merged with the current mutable.");
 	    throw new Error(`Mutable merge conflict for path '${path}'; state is updated, but mutable does not resemble the new state`);
+	}
 
 	metastate.writable && this.mutable[ path ]; // force mutable creation
 
+	log.trace("Return read result for '%s':", path, this.state[ path ] );
 	return this.state[ path ];
     }
 
     async write ( path ) {
+	log.info("Writing path '%s'", path );
 	const metastate			= this.metastate[ path ];
 	const mutable			= this.mutable[ path ];
 	const handler			= this.getPathHandler( path );
@@ -523,15 +659,26 @@ class ModWC {
 	if ( handler.update === undefined )
 	    throw new TypeError(`an update() method has not been defined for path type ${handler.name}`);
 
+	if ( metastate.invalid ) {
+	    metastate.failed		= true;
+
+	    const errors		= this.errors[ path ];
+	    throw new Error(`Validation error: ${errors}`);
+	}
+
 	const input			= handler.createInput( clone( mutable ) );
 
 	metastate.writing		= true;
 
+	log.debug("Final write input for '%s':", path, input );
 	const result			= await (
 	    metastate.present
 		? handler.update( handler.parsePath( path ), input, this.state[ path ] )
 		: handler.create( input )
 	);
+
+	if ( result === undefined )
+	    log.info("%s for path '%s' returned undefined", metastate.present ? "Update" : "Create", path );
 
 	metastate.writing		= false;
 
@@ -553,6 +700,7 @@ function createModWC( ...args ) {
 module.exports = {
     ModWC,
     createModWC,
+    DEADEND,
     logging ( level = "trace" ) {
 	console.log("Setting log level to '%s' for Logger: %s", level, log.context );
 	log.setLevel( level );

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+    <head>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+
+	<script type="module">
+	  import * as lit from './dependencies/lit-core.min.js';
+
+	  window.lit = lit;
+	  console.log("Defining lit", window.lit );
+	</script>
+
+	<title>ModWC demo</title>
+
+	<style type="text/css">
+	  .vh-100 {
+	    max-height: 100vh;
+	  }
+	</style>
+
+	<link rel="stylesheet" href="dependencies/bootstrap.min.css">
+	<link rel="stylesheet" href="dependencies/bootstrap-icons.css">
+    </head>
+    <body>
+	<div class="container-fluid">
+	    <div id="app" class="row bg-light">
+		<div class="col">
+		    <div class="row px-5 pt-5">
+			<div class="col-12">
+			    <h1>2 components shared state <small class="fw-light">(Lit + ModWC)</small></h1>
+			</div>
+			<div class="col-6">
+			    <user-post post-id="123456788"></user-post>
+			</div>
+			<div class="col-6">
+			    <user-post post-id="123456788"></user-post>
+			</div>
+		    </div>
+		    <div class="row px-5 pt-5">
+			<div class="col-12">
+			    <h1>2 components architectures <small class="fw-light">(Vue / Lit) + ModWC</small></h1>
+			</div>
+			<div class="col-6">
+			    <h3>Vue</h3>
+			    <vue-user-post post-id="123456788"></vue-user-post>
+			</div>
+			<div class="col-6">
+			    <h3>Lit</h3>
+			    <user-post post-id="123456788"></user-post>
+			</div>
+		    </div>
+		    <div class="row px-5 pt-5">
+			<div class="col-12">
+			    <h1>Mixed Example - Full CRUD <small class="fw-light">(Vue + Lit + ModWC)</small></h1>
+			</div>
+			<div class="col-6">
+			    <h3>All Posts ({{ posts?.length }})</h3>
+			    <div v-if="$posts.reading" class="d-flex justify-content-center">
+				<div class="spinner-border"></div>
+			    </div>
+			    <user-post v-for="post in posts" :post-id="post.id"></user-post>
+			</div>
+			<div class="col-6">
+			    <h3>New Post</h3>
+			    <user-post v-if="create_new" post-id="new" editing
+				       :onsave="close"></user-post>
+			    <div v-else class="text-end">
+				<a href="#" class="btn btn-outline-primary"
+				   @click="create_new = true">Add New Post</a>
+			    </div>
+			</div>
+		    </div>
+		</div>
+		<div class="col-4 bg-white vh-100 overflow-auto">
+		    <div class="px-4 pt-5">
+			<h2>Inspector Gadget</h2>
+			<hr>
+
+			<h3 class="fw-normal">State</h3>
+			<pre>{{ $debug($modwc.state) }}</pre>
+
+			<hr>
+
+			<h3 class="fw-normal">Mutable</h3>
+			<pre>{{ $debug($modwc.mutable) }}</pre>
+
+			<hr>
+
+			<h3 class="fw-normal">Errors</h3>
+			<pre>{{ $debug($modwc.errors) }}</pre>
+
+			<hr>
+
+			<h3 class="fw-normal">Metastate</h3>
+			<pre>{{ $debug($modwc.metastate) }}</pre>
+		    </div>
+		</div>
+	    </div>
+	</div>
+
+	<script defer src="../node_modules/vue/dist/vue.global.js"></script>
+	<script defer src="../node_modules/@whi/json/dist/json.bundled.js"></script>
+
+	<script defer src="../dist/modwc.bundled.js"></script>
+	<script type="module" src="app.js"></script>
+    </body>
+</html>
