@@ -2,7 +2,7 @@ const { LitElement, nothing,
 	html, css, unsafeCSS,
 	repeat }		= lit;
 
-console.log("Loading comments modwc");
+console.log("Loading comments openstate");
 
 
 const BOOTSTRAP_CSS			= await (await fetch("https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css")).text();
@@ -34,23 +34,23 @@ export class UserPost extends LitElement {
     ];
 
     get metastate () {
-	return this.$modwc.metastate[ this.datapath ];
+	return this.$openstate.metastate[ this.datapath ];
     }
 
     get state () {
-	return this.$modwc.state[ this.datapath ];
+	return this.$openstate.state[ this.datapath ];
     }
 
     get mutable () {
-	return this.$modwc.mutable[ this.datapath ];
+	return this.$openstate.mutable[ this.datapath ];
     }
 
-    get errors () {
-	return this.$modwc.errors[ this.datapath ];
+    get rejections () {
+	return this.$openstate.rejections[ this.datapath ];
     }
 
     get datapath () {
-	return this.postid ? `post/${this.postid}` : this.$modwc.DEADEND;
+	return this.postid ? `post/${this.postid}` : this.$openstate.DEADEND;
     }
 
     constructor () {
@@ -67,8 +67,8 @@ export class UserPost extends LitElement {
 	console.log("set postid:", this.postid, id );
 	this._postid		= id;
 
-	this.$modwc.on( this.datapath, (type, ...args) => {
-	    console.log("ModWC event '%s'", type, this, ...args );
+	this.$openstate.on( this.datapath, (type, ...args) => {
+	    console.log("OpenState event '%s'", type, this, ...args );
 
 	    if ( type === "state" )
 		this.requestUpdate();
@@ -92,11 +92,11 @@ export class UserPost extends LitElement {
     }
 
     resetMutable () {
-	this.$modwc.resetMutable( this.datapath );
+	this.$openstate.resetMutable( this.datapath );
     }
 
     async savePost () {
-	await this.$modwc.write( this.datapath );
+	await this.$openstate.write( this.datapath );
 
 	this.editing		= false;
 	this.postid		= this.state.id;
@@ -105,13 +105,13 @@ export class UserPost extends LitElement {
 	this.onsave && this.onsave();
 
 	console.log("Trigger all/posts read");
-	this.$modwc.read("all/posts");
+	this.$openstate.read("all/posts");
     }
 
-    formErrors () {
+    formRejections () {
 	return html`\
 <div class="invalid-feedback">
-    ${this.errors.map( msg => html`${msg}` )}
+    ${this.rejections.map( msg => html`${msg}` )}
 </div>
 `;
     }
@@ -143,7 +143,7 @@ export class UserPost extends LitElement {
     <div class="mb-3">
         <label class="form-label">Message</label>
         <input class="form-control" .value=${this.mutable.message} @input=${this.onInput} required ?disabled=${this.metastate.writing} />
-        ${this.formErrors()}
+        ${this.formRejections()}
     </div>
     <div class="col d-flex">
         ${ this.metastate.present ? [ cancel_btn, this.metastate.changed ? reset_btn : nothing ] : nothing }

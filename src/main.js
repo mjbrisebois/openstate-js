@@ -1,11 +1,11 @@
-const { ModWC,
+const { OpenState,
 	...expose }			=  require('./index.js');
 
 
 if ( typeof window === "undefined" ) {
     const { inspect }			= require('util');
 
-    Object.defineProperties( ModWC.prototype, {
+    Object.defineProperties( OpenState.prototype, {
 	[inspect.custom]: {
 	    value: function ( depth, options ) {
 		const repr			= {
@@ -13,13 +13,13 @@ if ( typeof window === "undefined" ) {
 		    "state":		this.state,
 		    "mutable":		this.mutable,
 		};
-		return "ModWC " + inspect( repr, options );
+		return "OpenState " + inspect( repr, options );
 	    },
 	},
     });
 }
 
 module.exports = {
-    ModWC,
+    OpenState,
     ...expose,
 };

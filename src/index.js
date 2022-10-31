@@ -1,7 +1,7 @@
 'use strict'
 
 const { Logger }			= require('@whi/weblogger');
-const log				= new Logger("modwc");
+const log				= new Logger("openstate");
 
 const { walk, ...objwalk }		= require('@whi/object-walk');
 
@@ -144,30 +144,46 @@ const computed_states			= [
     "current",
 ];
 
-function checkChange ( modwc, path, benchmark ) {
-    const metastate			= modwc.metastate[ path ];
-    const current			= serialize( modwc.mutable[ path ] );
+function checkChange ( openstate, path, benchmark ) {
+    const metastate			= openstate.metastate[ path ];
+    const current			= serialize( openstate.mutable[ path ] );
+
+    const before			= JSON.parse( benchmark );
+    const after				= JSON.parse( current );
+    const all_keys			= new Set([ ...Object.keys(before), ...Object.keys(after) ]);
+    const changed			= {};
+
+    for ( let k of all_keys ) {
+	if ( before[k] === undefined || after[k] === undefined ) // new prop or deleted prop
+	    changed[ k ]		= [ before[k], after[k] ];
+	else if ( typeof before[k] === "object" && before[k] !== null ) { // complex object
+	    if ( typeof after[k] !== "object" || serialize( before[k] ) !== serialize( after[k] ) ) // different type or value
+		changed[ k ]		= [ before[k], after[k] ];
+	}
+	else if ( typeof before[k] !== typeof after[k] || before[k] !== after[k] ) // is changed
+	    changed[ k ]		= [ before[k], after[k] ];
+    }
+
+    openstate.__changed[ path ]		= changed;
 
     // console.log("Comparing before/after states:\n      current: %s\n    benchmark: %s", current, benchmark );
-    metastate.changed		= current !== benchmark;
+    // metastate.changed		= current !== benchmark;
+    metastate.changed			= Object.keys(changed).length > 0;
 }
 
-function checkValidity ( modwc, path, data ) {
+function checkValidity ( openstate, path ) {
     // console.log("Validating path '%s':", path, data )
-    const handler			= modwc.getPathHandler( path );
-    const errors			= modwc.errors[ path ];
-
-    errors.length			= 0;
+    const handler			= openstate.getPathHandler( path );
 
     try {
-	handler.validate( path, data, errors );
+	handler.validate( path );
     } catch (err) {
 	console.error("Failed during validation of '%s'", path, err );
 	throw err;
     }
 }
 
-function onchange ( target, path, modwc, callback, target_benchmark ) {
+function onchange ( target, path, openstate, callback, target_benchmark ) {
     if ( !isSerializable( target ) )
 	throw new TypeError(`Cannot deep watch target because it has incompatible properties`);
 
@@ -178,7 +194,7 @@ function onchange ( target, path, modwc, callback, target_benchmark ) {
 	const value			= target[ key ];
 
 	if ( typeof value === "object" && value !== null )
-	    target[ key ]		= onchange( value, path, modwc, callback, target_benchmark );
+	    target[ key ]		= onchange( value, path, openstate, callback, target_benchmark );
     }
 
     return new Proxy( target, {
@@ -189,13 +205,13 @@ function onchange ( target, path, modwc, callback, target_benchmark ) {
 	    value			= clone( value );
 
 	    if ( typeof value === "object" && value !== null )
-		value			= onchange( value, path, modwc, callback, target_benchmark );
+		value			= onchange( value, path, openstate, callback, target_benchmark );
 
 	    // console.log("Change (set) detected for '%s' on target:", prop, target );
 	    try {
 		return Reflect.set( target, prop, value );
 	    } finally {
-		callback({ target_benchmark, target, modwc, path });
+		callback({ target_benchmark, target, openstate, path });
 	    }
 	},
 	deleteProperty ( target, prop ) {
@@ -204,7 +220,7 @@ function onchange ( target, path, modwc, callback, target_benchmark ) {
 	    try {
 		return Reflect.deleteProperty(...arguments);
 	    } finally {
-		callback({ target_benchmark, target, modwc, path });
+		callback({ target_benchmark, target, openstate, path });
 	    }
 	},
     });
@@ -212,25 +228,25 @@ function onchange ( target, path, modwc, callback, target_benchmark ) {
 
 
 
-function MetastateDB ( db, modwc ) {
+function MetastateDB ( db, openstate ) {
     return new Proxy( db, {
 	get ( target, path ) {
 	    if ( isSpecialProp( path ) )
 		return Reflect.get(...arguments);
 
 	    if ( target[ path ] === undefined ) {
-		const handler		= modwc.getPathHandler( path );
+		const handler		= openstate.getPathHandler( path );
 		target[ path ]		= new Proxy( Object.assign( {}, MetastateProperties ), {
 		    set ( target, prop, value ) {
 			if ( value === target[ prop ] )
 			    return true;
 
-			target[ prop ]			= value;
+			target[ prop ]		= value;
 
 			if ( ["present", "expired"].includes( prop ) )
-			    target.current		= target.present && !target.expired;
+			    target.current	= target.present && !target.expired;
 
-			modwc.emit( path, "metastate", prop, value );
+			openstate.emit( path, "metastate", prop, value );
 
 			return true;
 		    },
@@ -245,20 +261,20 @@ function MetastateDB ( db, modwc ) {
     });
 }
 
-function MutableDB ( db, modwc ) {
+function MutableDB ( db, openstate ) {
     return new Proxy( db, {
 	get ( target, path ) {
 	    if ( isSpecialProp( path ) )
 		return Reflect.get(...arguments);
 
 	    if ( target[ path ] === undefined ) {
-		const handler			= modwc.getPathHandler( path );
-		const metastate			= modwc.metastate[ path ];
+		const handler			= openstate.getPathHandler( path );
+		const metastate			= openstate.metastate[ path ];
 
 		if ( metastate.writable === false )
 		    throw new Error(`Cannot create a mutable version of ${path} because it is not writable`);
 
-		const state			= modwc.state[ path ];
+		const state			= openstate.state[ path ];
 
 		log.level.debug && !state && log.info("No state for path '%s'; must use default value", path );
 		const mutable			= state
@@ -266,23 +282,26 @@ function MutableDB ( db, modwc ) {
 		      : handler.defaultMutable( path );
 
 		if ( state === undefined )
-		    modwc.metastate[ path ].changed	= true;
+		    openstate.metastate[ path ].changed	= true;
 
-		checkValidity( modwc, path, clone(mutable) );
-
-		target[ path ]			= onchange( mutable, path, modwc, ({ target_benchmark }) => {
+		target[ path ]			= onchange( mutable, path, openstate, ({ target_benchmark }) => {
 		    if ( state !== undefined )
-			checkChange( modwc, path, target_benchmark );
+			checkChange( openstate, path, target_benchmark );
 
-		    checkValidity( modwc, path, clone(mutable) );
-		    modwc.emit( path, "mutable" );
+		    checkValidity( openstate, path );
+		    openstate.emit( path, "mutable" );
 		});
+
+		log.debug("Check validity of new mutable: %s", path );
+		checkValidity( openstate, path );
 	    }
 
 	    return Reflect.get(...arguments);
 	},
 	deleteProperty ( target, path ) {
-	    const metastate			= modwc.metastate[ path ];
+	    const metastate			= openstate.metastate[ path ];
+
+	    openstate.__changed[ path ]		= [];
 	    metastate.changed			= false;
 
 	    return Reflect.deleteProperty(...arguments);
@@ -290,42 +309,68 @@ function MutableDB ( db, modwc ) {
     });
 }
 
-function ErrorsDB ( db, modwc ) {
+function RejectionsDB ( db, openstate ) {
     return new Proxy( db, {
 	get ( target, path ) {
 	    if ( isSpecialProp( path ) )
 		return Reflect.get(...arguments);
 
 	    if ( target[ path ] === undefined ) {
-		const errors			= [];
-		target[ path ]			= onchange( errors, path, modwc, () => {
-		    const valid				= errors.length === 0;
-		    modwc.metastate[ path ].valid	= valid;
-		    modwc.metastate[ path ].invalid	= !valid;
+		const rejections		= [];
+		target[ path ]			= onchange( rejections, path, openstate, () => {
+		    const valid				= rejections.length === 0;
+		    openstate.metastate[ path ].valid	= valid;
+		    openstate.metastate[ path ].invalid	= !valid;
 		});
 	    }
 
 	    return Reflect.get(...arguments);
 	},
+	set () {
+	    throw new Error(`Do not manually set error lists`);
+	},
     });
 }
 
-function StateDB ( db, modwc ) {
+function ErrorsDB ( db, openstate ) {
+    return new Proxy( db, {
+	get ( target, path ) {
+	    if ( isSpecialProp( path ) )
+		return Reflect.get(...arguments);
+
+	    if ( target[ path ] === undefined )
+		target[ path ]			= { "read": null, "write": null };
+
+	    return Reflect.get(...arguments);
+	},
+	set () {
+	    throw new Error(`Do not manually set error context`);
+	},
+    });
+}
+
+function StateDB ( db, openstate ) {
     return new Proxy( db, {
 	set ( target, path, value ) {
-	    const handler		= modwc.getPathHandler( path );
+	    const handler		= openstate.getPathHandler( path );
 
 	    if ( !value.__adapted__ ) {
 		handler.adapt( value );
 		Object.defineProperty( value, "__adapted__", { value: true });
 	    }
 
-	    if ( modwc.strict )
-		deepFreeze( value );
+	    if ( openstate.strict ) {
+		try {
+		    deepFreeze( value );
+		} catch (err) {
+		    if ( err.message.includes("Cannot freeze array buffer views with elements") )
+			log.warn("Allowing unfreezable state value for: %s", path );
+		}
+	    }
 
 	    target[ path ]		= value;
 
-	    const metastate		= modwc.metastate[ path ];
+	    const metastate		= openstate.metastate[ path ];
 
 	    metastate.present		= true;
 
@@ -344,7 +389,7 @@ function StateDB ( db, modwc ) {
 		metastate.writable	= !!writable;
 	    }).catch(err => console.error(err));
 
-	    modwc.emit( path, "state" );
+	    openstate.emit( path, "state" );
 
 	    return true;
 	},
@@ -353,10 +398,10 @@ function StateDB ( db, modwc ) {
 
 
 class Handler {
-    constructor ( name, config, modwc ) {
+    constructor ( name, config, openstate ) {
 	this.name			= name;
 	this.config			= config;
-	this.context			= modwc;
+	this.context			= openstate;
 
 	this.path			= config.path.replace(/^\//, "");
 	this.regex_template		= this.path.replace(/(:[a-zA-Z_]+[^/])/g, "%" );
@@ -364,13 +409,68 @@ class Handler {
 	this.__async_validation_p	= Promise.resolve();
 	this.readonly			= config.readonly || false;
 
-	this.read			= config.read.bind( modwc );
+	this._read			= config.read;
 
 	if ( this.readonly )
 	    return;
 
-	this.create			= config.create.bind( modwc );
-	this.update			= config.update.bind( modwc );
+	this._create			= config.create;
+	this._update			= config.update;
+	this._delete			= config.delete;
+    }
+
+    scoped_this_arg ( path ) {
+	const openstate			= this.context;
+	return {
+	    "handler":		this,
+	    openstate,
+	    get state () {
+		return openstate.state[ path ];
+	    },
+	    get metastate () {
+		return openstate.metastate[ path ];
+	    },
+	    get mutable () {
+		return openstate.mutable[ path ];
+	    },
+	};
+    }
+
+    async read ( path ) {
+	return await this._read.call(
+	    this.scoped_this_arg( path ),
+	    this.parsePath( path )
+	);
+    }
+
+    async create ( path, input, intent ) {
+	if ( this._create === undefined )
+	    throw new TypeError(`a create() method has not been defined for path type ${this.name}`);
+
+	return await this._create.call(
+	    this.scoped_this_arg( path ),
+	    input, intent
+	);
+    }
+
+    async update ( path, changed, intent ) {
+	if ( this._update === undefined )
+	    throw new TypeError(`an update() method has not been defined for path type ${this.name}`);
+
+	return await this._update.call(
+	    this.scoped_this_arg( path ),
+	    this.parsePath( path ), changed, intent
+	);
+    }
+
+    async delete ( path, intent ) {
+	if ( this._delete === undefined )
+	    throw new TypeError(`a delete() method has not been defined for path type ${this.name}`);
+
+	return await this._delete.call(
+	    this.scoped_this_arg( path ),
+	    this.parsePath( path ), intent
+	);
     }
 
     async readable ( value ) {
@@ -395,7 +495,8 @@ class Handler {
 
     defaultMutable ( path ) {
 	if ( !this.config.defaultMutable )
-	    throw new Error(`No default value for handler ${this}`);
+	    return {};
+	//     throw new Error(`No default value for handler ${this}`);
 
 	return this.config.defaultMutable( path );
     }
@@ -432,35 +533,39 @@ class Handler {
 	    this.config.adapter( data );
     }
 
-    validate ( path, data, errors ) {
-	const metastate			= this.context.metastate[ path ];
-	const type			= metastate.present ? "update" : "create";
+    async validate ( path, intent ) {
+	const openstate			= this.context;
+	const metastate			= openstate.metastate[ path ];
+	const mutable			= openstate.mutable[ path ];
+	const rejections		= openstate.rejections[ path ];
+	const data			= clone( mutable );
+
+	rejections.length		= 0;
+
+	const type			= intent || ( metastate.present ? "update" : "create" );
 
 	if ( this.config.validation ) {
-	    const sync_errors		= [];
-	    this.config.validation( data, sync_errors, type );
+	    const added_rejections	= [];
+	    const async_p		= this.config.validation( data, added_rejections, type );
+	    this.__async_validation_p	= async_p;
 
-	    log.debug("Adding %s sync errors", sync_errors.length );
-	    errors.splice( 0, errors.length, ...sync_errors );
+	    log.debug("Adding %s sync rejections for %s", added_rejections.length, path );
+	    rejections.splice( 0, 0, ...added_rejections );
+
+	    added_rejections.length	= 0;
+
+	    await async_p;
+
+	    if ( this.__async_validation_p !== async_p ) {
+		log.warn("Discarding %s outdated async errors", added_rejections.length );
+		return; // discard errors because a new validation has replaced this one
+	    }
+
+	    log.debug("Adding %s async rejections for %s", added_rejections.length, path );
+	    rejections.splice( rejections.length, 0, ...added_rejections );
 	}
 
-	if ( this.config.asyncValidation ) {
-	    const async_errors		= [];
-	    const async_promise		= this.config.asyncValidation( data, async_errors, type )
-		.catch(err => console.error(err));
-
-	    async_promise.then(() => {
-		if ( this.__async_validation_p !== async_promise ) {
-		    log.warn("Discarding %s outdated async errors", async_errors.length );
-		    return; // discard errors because a new validation has replaced this one
-		}
-
-		log.debug("Adding %s async errors", async_errors.length );
-		errors.splice( errors.length, 0, ...async_errors );
-	    });
-
-	    this.__async_validation_p	= async_promise;
-	}
+	return rejections;
     }
 
     toString () {
@@ -469,7 +574,7 @@ class Handler {
 }
 
 
-class ModWC {
+class OpenState {
     static DEADEND			= DEADEND;
 
     constructor ({ reactive, strict = true } = {}, handlers ) {
@@ -499,6 +604,7 @@ class ModWC {
 
 			"valid":	false,
 			"invalid":	true,
+			"failed":	false,
 		    },
 		},
 	    },
@@ -512,12 +618,20 @@ class ModWC {
 		    [DEADEND]: Object.freeze({}),
 		},
 	    },
-	    "__errors": {
+	    "__rejections": {
 		"value": {
 		    [DEADEND]: [],
 		},
 	    },
+	    "__errors": {
+		"value": {
+		    [DEADEND]: { read: null, write: null, },
+		},
+	    },
 	    "__listeners": {
+		"value": {},
+	    },
+	    "__changed": {
 		"value": {},
 	    },
 	});
@@ -526,11 +640,13 @@ class ModWC {
 	    this.metastate		= reactive( MetastateDB( this.__metastate, this ) );
 	    this.state			= reactive( StateDB( this.__state, this ) );
 	    this.mutable		= reactive( MutableDB( this.__mutable, this ) );
+	    this.rejections		= reactive( RejectionsDB( this.__rejections, this ) );
 	    this.errors			= reactive( ErrorsDB( this.__errors, this ) );
 	} else {
 	    this.metastate		= MetastateDB( this.__metastate, this );
 	    this.state			= StateDB( this.__state, this );
 	    this.mutable		= MutableDB( this.__mutable, this );
+	    this.rejections		= RejectionsDB( this.__rejections, this );
 	    this.errors			= ErrorsDB( this.__errors, this );
 	}
     }
@@ -576,7 +692,7 @@ class ModWC {
 
     getPathHandler ( path ) {
 	// console.log("getPathHandler( %s )", path );
-	const handler		= this._handlers.find( handler => handler.isMatch( path ) );
+	const handler			= this._handlers.find( handler => handler.isMatch( path ) );
 
 	if ( !handler )
 	    throw new Error(`No handler for path: ${path}`);
@@ -589,11 +705,17 @@ class ModWC {
 	return handler.__async_validation_p;
     }
 
+    movePath ( fromPath, toPath ) {
+	this.state[ toPath ]		= this.state[ fromPath ];
+	this.purge( fromPath );
+    }
+
     purge ( path ) {
+	log.normal("Purge path: %s", path );
 	delete this.metastate[ path ];
 	delete this.state[ path ];
 	delete this.mutable[ path ];
-	delete this.errors[ path ];
+	delete this.rejections[ path ];
 	delete this.__listeners[ path ];
     }
 
@@ -605,13 +727,23 @@ class ModWC {
 	return this.mutable[ path ];
     }
 
+    getChanged ( path ) {
+	if ( this.__changed[ path ] === undefined )
+	    return {};
+
+	return Object.entries(this.__changed[ path ]).reduce( (acc, [k,[b,a]]) => {
+	    acc[ k ]			= a;
+	    return acc;
+	}, {} );
+    }
+
     async get ( path ) {
 	return this.state[ path ]
 	    ? this.state[path]
 	    : await this.read( path );
     }
 
-    async read ( path ) {
+    async read ( path, { allowMergeConflict = false } = {}) {
 	const metastate			= this.metastate[ path ];
 	const handler			= this.getPathHandler( path );
 
@@ -621,7 +753,7 @@ class ModWC {
 	}
 
 	metastate.reading		= true;
-	this._readings[ path ]		= handler.read( handler.parsePath( path ), path );
+	this._readings[ path ]		= handler.read( path, handler.parsePath( path ), path );
 
 	const result			= await this._readings[ path ];
 
@@ -639,7 +771,8 @@ class ModWC {
 
 	if ( metastate.changed !== false ) {
 	    log.warn("New state's mutable value cannot be merged with the current mutable.");
-	    throw new Error(`Mutable merge conflict for path '${path}'; state is updated, but mutable does not resemble the new state`);
+	    if ( allowMergeConflict !== true )
+		throw new Error(`Mutable merge conflict for path '${path}'; state is updated, but mutable does not resemble the new state`);
 	}
 
 	metastate.writable && this.mutable[ path ]; // force mutable creation
@@ -648,58 +781,94 @@ class ModWC {
 	return this.state[ path ];
     }
 
-    async write ( path ) {
+    async write ( path, intent ) {
 	log.info("Writing path '%s'", path );
+	const state			= this.state[ path ];
 	const metastate			= this.metastate[ path ];
 	const mutable			= this.mutable[ path ];
+	const changed			= this.getChanged( path );
 	const handler			= this.getPathHandler( path );
-
-	if ( handler.create === undefined )
-	    throw new TypeError(`a create() method has not been defined for path type ${handler.name}`);
-	if ( handler.update === undefined )
-	    throw new TypeError(`an update() method has not been defined for path type ${handler.name}`);
-
-	if ( metastate.invalid ) {
-	    metastate.failed		= true;
-
-	    const errors		= this.errors[ path ];
-	    throw new Error(`Validation error: ${errors}`);
-	}
-
-	const input			= handler.createInput( clone( mutable ) );
 
 	metastate.writing		= true;
 
-	log.debug("Final write input for '%s':", path, input );
-	const result			= await (
-	    metastate.present
-		? handler.update( handler.parsePath( path ), input, this.state[ path ] )
-		: handler.create( input )
-	);
+	await this.validation( path );
 
-	if ( result === undefined )
-	    log.info("%s for path '%s' returned undefined", metastate.present ? "Update" : "Create", path );
+	try {
+	    if ( Array.isArray( intent ) )
+		intent			= intent.join("&");
 
-	metastate.writing		= false;
+	    const rejections		= intent === undefined
+		  ? this.rejections[ path ]
+		  : await handler.validate( path, intent );
 
-	delete this.mutable[ path ];
+	    if ( rejections.length > 0 ) {
+		metastate.failed	= true;
+		throw new Error(`Validation error: ${rejections}`);
+	    }
 
-	if ( result )
-	    this.state[ path ]		= result;
-	else
-	    this.read( path );
+	    const input			= handler.createInput( clone( mutable ) );
+
+	    log.debug("Final write input for '%s':", path, input );
+	    const result		= await (
+		metastate.present
+		    ? handler.update( path, changed, intent )
+		    : handler.create( path, input, intent )
+	    );
+
+	    if ( result === undefined )
+		log.info("%s for path '%s' returned undefined", metastate.present ? "Update" : "Create", path );
+
+	    // We should be able to do a partial reset for mutable based on 'intent'
+	    delete this.mutable[ path ];
+
+	    if ( result )
+		this.state[ path ]	= result;
+	    else
+		this.read( path );
+	} catch (err) {
+	    this.errors[ path ].write	= err;
+
+	    if ( intent )
+		this.errors[ path ][ intent ]	= err;
+
+	    throw err;
+	} finally {
+	    metastate.writing		= false;
+	}
+    }
+
+    async delete ( path, intent ) {
+	log.info("Deleting path '%s'", path );
+	const metastate			= this.metastate[ path ];
+	const handler			= this.getPathHandler( path );
+
+	metastate.writing		= true;
+
+	try {
+	    await handler.delete( path, intent );
+	} catch (err) {
+	    this.errors[ path ].write	= err;
+	    this.errors[ path ].delete	= err;
+
+	    if ( intent )
+		this.errors[ path ][ intent ]	= err;
+
+	    throw err;
+	} finally {
+	    metastate.writing		= false;
+	}
     }
 }
 
 
-function createModWC( ...args ) {
-    return new ModWC( ...args );
+function create ( ...args ) {
+    return new OpenState( ...args );
 }
 
 
 module.exports = {
-    ModWC,
-    createModWC,
+    OpenState,
+    create,
     DEADEND,
     logging ( level = "trace" ) {
 	console.log("Setting log level to '%s' for Logger: %s", level, log.context );

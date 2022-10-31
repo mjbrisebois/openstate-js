@@ -5,7 +5,7 @@
 		<label class="form-label">Message</label>
 		<input class="form-control" v-model="mutable.message" :disabled="metastate.writing" required />
 		<div class="invalid-feedback">
-		    <span v-for="msg in errors">{{ msg }}</span>
+		    <span v-for="msg in rejections">{{ msg }}</span>
 		</div>
 	    </div>
 	    <div class="col d-flex">

@@ -1,6 +1,6 @@
 
 SHELL		= bash
-DIST_NAME	= modwc.bundled.js
+DIST_NAME	= openstate.bundled.js
 
 #
 # Runtime Setup

@@ -1,5 +1,5 @@
 
-const { createModWC }			= ModWC;
+OpenState.logging();
 
 const delay				= (ms=0) => new Promise(f => setTimeout(f,ms));
 const database				= {
@@ -15,12 +15,12 @@ function new_id () {
 }
 
 
-export const modwc			= new createModWC({
+export const openstate			= new OpenState.create({
     "strict": true,
     "reactive": Vue.reactive,
 });
 
-modwc.addHandlers({
+openstate.addHandlers({
     "Post": {
 	"path": "post/:id",
 	async read ({ id }) {
@@ -40,7 +40,7 @@ modwc.addHandlers({
 
 	    const result		= Object.assign( {}, database[ data.id ] );
 
-	    this.state[ `post/${data.id}` ] = result;
+	    this.openstate.state[ `post/${data.id}` ] = result;
 
 	    console.log("wrote new post:", result, database );
 	    return result;
@@ -57,20 +57,19 @@ modwc.addHandlers({
 		"message": "",
 	    };
 	},
-	validation ( data, errors ) {
+	async validation ( data, rejections ) {
 	    if ( data.message === undefined )
-		errors.push(`'message' is required`);
+		rejections.push(`'message' is required`);
 	    else if ( typeof data.message !== "string" )
-		errors.push(`'message' must be a string`);
+		rejections.push(`'message' must be a string`);
 
 	    if ( data.message.trim() === "" )
-		errors.push(`'message' cannot be empty`);
-	},
-	async asyncValidation ( data, errors ) {
+		rejections.push(`'message' cannot be empty`);
+
 	    await delay( data.metadata?.delay || 10 );
 
 	    if ( data.metadata?.foo )
-		errors.push("metadata issue");
+		rejections.push("metadata issue");
 	},
     },
     "Posts": {
@@ -83,7 +82,7 @@ modwc.addHandlers({
 		  .map( p => Object.assign( {}, p ) );
 
 	    for ( let post of list ) {
-		this.state[`post/${post.id}`] = post;
+		this.openstate.state[`post/${post.id}`] = post;
 	    }
 
 	    console.log("all posts response:", list );
@@ -93,4 +92,4 @@ modwc.addHandlers({
 });
 
 
-HTMLElement.prototype.$modwc		= modwc;
+HTMLElement.prototype.$openstate	= openstate;

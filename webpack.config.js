@@ -8,7 +8,7 @@ module.exports = {
 	filename: process.env.OUTPUT,
 	globalObject: "this",
 	library: {
-	    "name": "ModWC",
+	    "name": "OpenState",
 	    "type": "umd",
 	},
     },

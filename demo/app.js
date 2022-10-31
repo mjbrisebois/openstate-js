@@ -1,17 +1,15 @@
 
-import { modwc }			from './modwc_setup.js';
-import { UserPost }			from './modwc_comments.js';
+import { openstate }			from './openstate_setup.js';
+import { UserPost }			from './lit_comments.js';
 
-window.modwc				= modwc;
-
-ModWC.logging();
+window.openstate			= openstate;
 
 console.log("Defining user-post");
 customElements.define("user-post", UserPost );
 
 const allposts				= "all/posts";
 
-modwc.read( allposts );
+openstate.read( allposts );
 
 
 const app				= Vue.createApp({
@@ -24,11 +22,11 @@ const app				= Vue.createApp({
     },
     "computed": {
 	posts () {
-	    console.log( allposts, this.$modwc.state["all/posts"] )
-	    return this.$modwc.state[ allposts ] || null;
+	    console.log( allposts, this.$openstate.state["all/posts"] )
+	    return this.$openstate.state[ allposts ] || null;
 	},
 	$posts () {
-	    return this.$modwc.metastate[ allposts ];
+	    return this.$openstate.metastate[ allposts ];
 	},
     },
     "methods": {
@@ -40,14 +38,14 @@ const app				= Vue.createApp({
 	    // copy it.  Currently, reset will create a new mutable from the state rather than the
 	    // default because the state has been populated with the write response.
 	    //
-	    // this.$modwc.resetMutable( "post/new" );
-	    this.$modwc.purge( "post/new" );
+	    // this.$openstate.resetMutable( "post/new" );
+	    this.$openstate.purge( "post/new" );
 	}
     },
 });
 
 Object.assign( app.config.globalProperties, {
-    "$modwc":		modwc,
+    "$openstate":		openstate,
     "$debug":		JSON2.debug,
 });
 
@@ -82,19 +80,19 @@ app.component( 'vue-user-post', {
     },
     "computed": {
 	datapath () {
-	    return this.postid ? `post/${this.postid}` : this.$modwc.DEADEND;
+	    return this.postid ? `post/${this.postid}` : this.$openstate.DEADEND;
 	},
 	metastate () {
-	    return this.$modwc.metastate[ this.datapath ];
+	    return this.$openstate.metastate[ this.datapath ];
 	},
 	state () {
-	    return this.$modwc.state[ this.datapath ];
+	    return this.$openstate.state[ this.datapath ];
 	},
 	mutable () {
-	    return this.$modwc.mutable[ this.datapath ];
+	    return this.$openstate.mutable[ this.datapath ];
 	},
-	errors () {
-	    return this.$modwc.errors[ this.datapath ];
+	rejections () {
+	    return this.$openstate.rejections[ this.datapath ];
 	},
     },
     "methods": {
@@ -105,10 +103,10 @@ app.component( 'vue-user-post', {
 	    this.show_editor		= false;
 	},
 	resetMutable () {
-	    this.$modwc.resetMutable( this.datapath );
+	    this.$openstate.resetMutable( this.datapath );
 	},
 	async savePost () {
-	    await this.$modwc.write( this.datapath );
+	    await this.$openstate.write( this.datapath );
 
 	    this.show_editor		= false;
 	    this.postid			= this.state.id;
@@ -117,7 +115,7 @@ app.component( 'vue-user-post', {
 	    this.onsave && this.onsave();
 
 	    console.log("Trigger all/posts read");
-	    this.$modwc.read("all/posts");
+	    this.$openstate.read("all/posts");
 	},
     },
 });

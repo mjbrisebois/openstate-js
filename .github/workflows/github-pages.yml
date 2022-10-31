@@ -33,7 +33,7 @@ jobs:
         with:
           node-version: '18'
       - run: npm i
-      - run: OUTPUT=modwc.bundled.js npx webpack
+      - run: OUTPUT=openstate.bundled.js npx webpack
       - name: Setup Pages
         uses: actions/configure-pages@v2
       - name: Upload artifact

@@ -10,7 +10,7 @@
 	  console.log("Defining lit", window.lit );
 	</script>
 
-	<title>ModWC demo</title>
+	<title>OpenState demo</title>
 
 	<style type="text/css">
 	  .vh-100 {
@@ -27,7 +27,7 @@
 		<div class="col">
 		    <div class="row px-5 pt-5">
 			<div class="col-12">
-			    <h1>2 components shared state <small class="fw-light">(Lit + ModWC)</small></h1>
+			    <h1>2 components shared state <small class="fw-light">(Lit + OpenState)</small></h1>
 			</div>
 			<div class="col-6">
 			    <user-post post-id="123456788"></user-post>
@@ -38,7 +38,7 @@
 		    </div>
 		    <div class="row px-5 pt-5">
 			<div class="col-12">
-			    <h1>2 components architectures <small class="fw-light">(Vue / Lit) + ModWC</small></h1>
+			    <h1>2 components architectures <small class="fw-light">(Vue / Lit) + OpenState</small></h1>
 			</div>
 			<div class="col-6">
 			    <h3>Vue</h3>
@@ -51,7 +51,7 @@
 		    </div>
 		    <div class="row px-5 pt-5">
 			<div class="col-12">
-			    <h1>Mixed Example - Full CRUD <small class="fw-light">(Vue + Lit + ModWC)</small></h1>
+			    <h1>Mixed Example - Full CRUD <small class="fw-light">(Vue + Lit + OpenState)</small></h1>
 			</div>
 			<div class="col-6">
 			    <h3>All Posts ({{ posts?.length }})</h3>
@@ -77,22 +77,27 @@
 			<hr>
 
 			<h3 class="fw-normal">State</h3>
-			<pre>{{ $debug($modwc.state) }}</pre>
+			<pre>{{ $debug($openstate.state) }}</pre>
 
 			<hr>
 
 			<h3 class="fw-normal">Mutable</h3>
-			<pre>{{ $debug($modwc.mutable) }}</pre>
+			<pre>{{ $debug($openstate.mutable) }}</pre>
+
+			<hr>
+
+			<h3 class="fw-normal">Rejections</h3>
+			<pre>{{ $debug($openstate.rejections) }}</pre>
 
 			<hr>
 
 			<h3 class="fw-normal">Errors</h3>
-			<pre>{{ $debug($modwc.errors) }}</pre>
+			<pre>{{ $debug($openstate.errors) }}</pre>
 
 			<hr>
 
 			<h3 class="fw-normal">Metastate</h3>
-			<pre>{{ $debug($modwc.metastate) }}</pre>
+			<pre>{{ $debug($openstate.metastate) }}</pre>
 		    </div>
 		</div>
 	    </div>
@@ -101,7 +106,7 @@
 	<script defer src="../node_modules/vue/dist/vue.global.js"></script>
 	<script defer src="../node_modules/@whi/json/dist/json.bundled.js"></script>
 
-	<script defer src="../dist/modwc.bundled.js"></script>
+	<script defer src="../dist/openstate.bundled.js"></script>
 	<script type="module" src="app.js"></script>
     </body>
 </html>

@@ -1,15 +1,17 @@
 {
-  "name": "@whi/modwc",
-  "version": "0.1.0",
-  "description": "",
+  "name": "openstate",
+  "version": "0.0.1",
+  "description": "A modular framework for shared state management",
   "main": "src/main.js",
-  "browser": "dist/modwc.bundled.js",
+  "browser": "dist/openstate.bundled.js",
   "files": [
     "README.md",
+    "CONTRIBUTING.md",
     "src/main.js",
     "src/index.js",
-    "dist/modwc.bundled.js",
-    "dist/modwc.bundled.js.map"
+    "dist/openstate.bundled.js",
+    "dist/openstate.bundled.js.map",
+    "docs/API.md"
   ],
   "scripts": {},
   "author": "Matthew Brisebois",
