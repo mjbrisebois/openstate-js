@@ -27,7 +27,7 @@ See [Demo](https://mjbrisebois.github.io/openstate-js/demo/)
 - `writing`  - **True** if a write is currently in process
 - `cached`   - **True** if the value exists in cache storage
 - `expired`  - *Implementation specific*
-- `valid`    - **True** if `errors` is empty
+- `valid`    - **True** if `rejections` is empty
 - `invalid`  - Inverse of `valid`
 - `failed`   - **True** if `write` was called and stopped because of `invalid`
 

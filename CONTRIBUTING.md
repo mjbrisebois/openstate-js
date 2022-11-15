@@ -23,6 +23,10 @@ around a data context.
   - [ ] fetch, recover, obtain, access, procure, fetch, acquire, grab, collect, produce, provide
 - [ ] query string controls for path
   - [ ] instead of having an implicit path `something/all` we could use `something/*?filter=value`
+- [ ] transparent path aliases
+  - the source path would be the one that has the resources UID where as more specific path routes
+    would be aliases for the source
+  - then the source will be updated regardless of the method in which the resource was fetched
 
 
 ## Development

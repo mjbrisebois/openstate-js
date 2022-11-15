@@ -3,72 +3,46 @@
 const { Logger }			= require('@whi/weblogger');
 const log				= new Logger("openstate");
 
-const { walk, ...objwalk }		= require('@whi/object-walk');
+const deepEqual				= require('deep-equal');
+const deepClone				= require('clone-deep');
+const repr				= require('@whi/repr');
 
 const DEADEND				= Symbol(); // inactive, dormant, idle, passive, lifeless, uninhabited, static, nothing, none, nil
 
 
-function serialize ( value, indent, ordered = true ) {
-    let keys				= [];
-
-    walk( value, function (k,v,path) {
-	if ( typeof k === "string" && ordered === true )
-	    keys.push( k );
-	return v;
-    });
-
-    if ( ordered === true )
-	keys.sort();
-
-    return JSON.stringify( value, keys, indent );
-}
-
-function makeDeepClone ( target ) {
-    const target_json			= serialize( target );
-    const clone				= JSON.parse( target_json );
-    const clone_json			= serialize( clone );
-
-    return {
-	target_json,
-	clone,
-	clone_json,
-    };
+function verifySerializable ( target ) {
+    if ( target === undefined )
+	throw new TypeError(`'undefined' cannot be serialized`);
+    else if ( target === null || ["string", "number", "boolean"].includes( typeof target ) )
+	return;
+    else if ( ["Object", "Array"].includes( target.constructor.name ) ) {
+	for ( let key in target ) {
+	    // TODO: prevent circular loops
+	    verifySerializable( target[ key ] )
+	}
+	return;
+    }
+    else if ( ArrayBuffer.isView( target ) )
+	return;
+    else
+	throw new TypeError(`Unknown type '${repr(target)}' may not be serializable`);
 }
 
 function isSerializable ( target ) {
-    if ( target === undefined )
+    try {
+	verifySerializable( target );
+    } catch (err) {
+	console.error("Serialization check failure:", err );
 	return false;
-    else if ( target === null || ["string", "number", "boolean"].includes( typeof target ) )
-	return true;
-    else if ( typeof target.toJSON === "function" )
-	return true;
-    else if ( !["Object", "Array"].includes( target.constructor.name ) )
-	return false;
-
-    for ( let key in target ) {
-	// TODO: prevent circular loops
-	if ( !isSerializable( target[ key ] ) )
-	    return false;
     }
-
-    const { target_json,
-	    clone_json }		= makeDeepClone( target );
-
-    // console.log("Checking serialization of target:", target, target_json, clone_json );
-
-    return target_json === clone_json;
+    return true;
 }
 
 function clone ( target ) {
-    const { target_json,
-	    clone_json,
-	    clone }			= makeDeepClone( target );
-
-    if ( target_json !== clone_json )
-	throw new Error(`Object contains values that are not serializable using JSON:\n    ${target_json}\n    ${clone_json}`);
-
-    // return structuredClone( obj );
-    return clone;
+    log.debug("Cloning target:", target );
+    const cloned			= deepClone( target );
+    log.debug("Finished cloning target:", target, cloned );
+    return cloned;
 }
 
 function deepFreeze(object) {
@@ -146,10 +120,10 @@ const computed_states			= [
 
 function checkChange ( openstate, path, benchmark ) {
     const metastate			= openstate.metastate[ path ];
-    const current			= serialize( openstate.mutable[ path ] );
+    // const current			= serialize( openstate.mutable[ path ] );
 
-    const before			= JSON.parse( benchmark );
-    const after				= JSON.parse( current );
+    const before			= benchmark;
+    const after				= openstate.mutable[ path ];
     const all_keys			= new Set([ ...Object.keys(before), ...Object.keys(after) ]);
     const changed			= {};
 
@@ -157,7 +131,7 @@ function checkChange ( openstate, path, benchmark ) {
 	if ( before[k] === undefined || after[k] === undefined ) // new prop or deleted prop
 	    changed[ k ]		= [ before[k], after[k] ];
 	else if ( typeof before[k] === "object" && before[k] !== null ) { // complex object
-	    if ( typeof after[k] !== "object" || serialize( before[k] ) !== serialize( after[k] ) ) // different type or value
+	    if ( typeof after[k] !== "object" || !deepEqual( before[k], after[k] ) ) // different type or value
 		changed[ k ]		= [ before[k], after[k] ];
 	}
 	else if ( typeof before[k] !== typeof after[k] || before[k] !== after[k] ) // is changed
@@ -167,7 +141,6 @@ function checkChange ( openstate, path, benchmark ) {
     openstate.__changed[ path ]		= changed;
 
     // console.log("Comparing before/after states:\n      current: %s\n    benchmark: %s", current, benchmark );
-    // metastate.changed		= current !== benchmark;
     metastate.changed			= Object.keys(changed).length > 0;
 }
 
@@ -183,31 +156,23 @@ function checkValidity ( openstate, path ) {
     }
 }
 
-function onchange ( target, path, openstate, callback, target_benchmark ) {
-    if ( !isSerializable( target ) )
-	throw new TypeError(`Cannot deep watch target because it has incompatible properties`);
-
+function onchange ( watched_target, path, openstate, callback, target_benchmark ) {
     if ( target_benchmark === undefined )
-	target_benchmark		= serialize( target );
+	target_benchmark		= clone( watched_target );
 
-    for ( let key in target ) {
-	const value			= target[ key ];
-
-	if ( typeof value === "object" && value !== null )
-	    target[ key ]		= onchange( value, path, openstate, callback, target_benchmark );
-    }
-
-    return new Proxy( target, {
-	set ( target, prop, value ) {
-	    if ( !isSerializable( value ) )
-		throw new TypeError(`Cannot set '${prop}' to type '${value.constructor.name}'; Mutable values must be compatible with JSON serialization`);
-
-	    value			= clone( value );
+    return new Proxy( watched_target, {
+	get ( target, prop ) {
+	    const value			= target[ prop ];
 
 	    if ( typeof value === "object" && value !== null )
-		value			= onchange( value, path, openstate, callback, target_benchmark );
+		return onchange( value, path, openstate, callback, target_benchmark );
 
-	    // console.log("Change (set) detected for '%s' on target:", prop, target );
+	    return value;
+	},
+	set ( target, prop, value ) {
+	    if ( !isSerializable( value ) )
+		throw new TypeError(`Cannot set '${prop}' to type '${value.constructor.name}'; Mutable values must be serializable`);
+
 	    try {
 		return Reflect.set( target, prop, value );
 	    } finally {
@@ -216,7 +181,6 @@ function onchange ( target, path, openstate, callback, target_benchmark ) {
 	},
 	deleteProperty ( target, prop ) {
 	    // console.log("Change (delete) detected for '%s' on target:", prop, target );
-
 	    try {
 		return Reflect.deleteProperty(...arguments);
 	    } finally {
@@ -267,6 +231,8 @@ function MutableDB ( db, openstate ) {
 	    if ( isSpecialProp( path ) )
 		return Reflect.get(...arguments);
 
+	    const state				= openstate.state[ path ];
+
 	    if ( target[ path ] === undefined ) {
 		const handler			= openstate.getPathHandler( path );
 		const metastate			= openstate.metastate[ path ];
@@ -274,29 +240,34 @@ function MutableDB ( db, openstate ) {
 		if ( metastate.writable === false )
 		    throw new Error(`Cannot create a mutable version of ${path} because it is not writable`);
 
-		const state			= openstate.state[ path ];
+		let mutable;
+		if ( state ) {
+		    log.info("Deriving mutable from state for '%s'", path );
+		    mutable			= handler.toMutable( state );
+		} else {
+		    log.info("No state for path '%s'; using default mutable", path );
+		    mutable			= handler.defaultMutable( path );
+		}
 
-		log.level.debug && !state && log.info("No state for path '%s'; must use default value", path );
-		const mutable			= state
-		      ? handler.toMutable( state )
-		      : handler.defaultMutable( path );
+		if ( !isSerializable( mutable ) )
+		    throw new TypeError(`New mutable for '${path}' has properties that cannot be serialized`);
 
 		if ( state === undefined )
 		    openstate.metastate[ path ].changed	= true;
 
-		target[ path ]			= onchange( mutable, path, openstate, ({ target_benchmark }) => {
-		    if ( state !== undefined )
-			checkChange( openstate, path, target_benchmark );
-
-		    checkValidity( openstate, path );
-		    openstate.emit( path, "mutable" );
-		});
+		target[ path ]			= openstate.wrapReactivity( mutable );
 
 		log.debug("Check validity of new mutable: %s", path );
 		checkValidity( openstate, path );
 	    }
 
-	    return Reflect.get(...arguments);
+	    return onchange( target[ path ], path, openstate, ({ target_benchmark }) => {
+		if ( state !== undefined )
+		    checkChange( openstate, path, target_benchmark );
+
+		checkValidity( openstate, path );
+		openstate.emit( path, "mutable" );
+	    });
 	},
 	deleteProperty ( target, path ) {
 	    const metastate			= openstate.metastate[ path ];
@@ -354,7 +325,7 @@ function StateDB ( db, openstate ) {
 	set ( target, path, value ) {
 	    const handler		= openstate.getPathHandler( path );
 
-	    if ( !value.__adapted__ ) {
+	    if ( !value.__adapted__ && Object.isExtensible( value ) ) {
 		handler.adapt( value );
 		Object.defineProperty( value, "__adapted__", { value: true });
 	    }
@@ -422,8 +393,9 @@ class Handler {
     scoped_this_arg ( path ) {
 	const openstate			= this.context;
 	return {
-	    "handler":		this,
 	    openstate,
+	    "handler":		this,
+	    "params":		this.parsePath( path ),
 	    get state () {
 		return openstate.state[ path ];
 	    },
@@ -436,10 +408,10 @@ class Handler {
 	};
     }
 
-    async read ( path ) {
+    async read ( path, opts ) {
 	return await this._read.call(
 	    this.scoped_this_arg( path ),
-	    this.parsePath( path )
+	    this.parsePath( path ), opts
 	);
     }
 
@@ -483,7 +455,7 @@ class Handler {
 	return await this.config.permissions.readable.call( this.context, value );
     }
 
-    async writable ( value, path ) {
+    async writable ( value ) {
 	if ( !this.config.permissions )
 	    return;
 
@@ -501,14 +473,14 @@ class Handler {
 	return this.config.defaultMutable( path );
     }
 
-    toMutable ( origin ) {
-	let mutable;
+    toMutable ( state ) {
+	let mutable			= state;
 
-	if ( this.config.toMutable ) {
-	    mutable			= this.config.toMutable( origin );
-	} else {
-	    mutable			= origin;
-	}
+	if ( this.context.globalDefaults.toMutable )
+	    mutable			= this.context.globalDefaults.toMutable( mutable ) || mutable;
+
+	if ( this.config.toMutable )
+	    mutable			= this.config.toMutable( mutable ) || mutable;
 
 	return clone( mutable );
     }
@@ -529,6 +501,9 @@ class Handler {
     }
 
     adapt ( data ) {
+	if ( this.context.globalDefaults.adapter )
+	    this.context.globalDefaults.adapter( data );
+
 	if ( this.config.adapter )
 	    this.config.adapter( data );
     }
@@ -536,9 +511,11 @@ class Handler {
     async validate ( path, intent ) {
 	const openstate			= this.context;
 	const metastate			= openstate.metastate[ path ];
-	const mutable			= openstate.mutable[ path ];
+
+	openstate.mutable[ path ]; // make sure it exists
+	const mutable			= openstate.__mutable[ path ];
 	const rejections		= openstate.rejections[ path ];
-	const data			= clone( mutable );
+	// const data			= clone( mutable );
 
 	rejections.length		= 0;
 
@@ -546,7 +523,7 @@ class Handler {
 
 	if ( this.config.validation ) {
 	    const added_rejections	= [];
-	    const async_p		= this.config.validation( data, added_rejections, type );
+	    const async_p		= this.config.validation( mutable, added_rejections, type );
 	    this.__async_validation_p	= async_p;
 
 	    log.debug("Adding %s sync rejections for %s", added_rejections.length, path );
@@ -577,11 +554,14 @@ class Handler {
 class OpenState {
     static DEADEND			= DEADEND;
 
-    constructor ({ reactive, strict = true } = {}, handlers ) {
+    constructor ({ reactive, strict = true, globalDefaults = {} } = {}, handlers ) {
+	this.DEADEND			= DEADEND;
 	this._handlers			= [];
 	this._readings			= {};
+
 	this.strict			= !!strict;
-	this.DEADEND			= DEADEND;
+	this.globalDefaults		= globalDefaults;
+	this.reactive_wrapper		= reactive;
 
 	if ( handlers )
 	    this.addHandlers( handlers );
@@ -651,6 +631,10 @@ class OpenState {
 	}
     }
 
+    wrapReactivity ( value ) {
+	return this.reactive_wrapper( value );
+    }
+
     addHandlers ( handlers ) {
 	for ( let name in handlers ) {
 	    const config		= handlers[ name ];
@@ -717,6 +701,7 @@ class OpenState {
 	delete this.mutable[ path ];
 	delete this.rejections[ path ];
 	delete this.__listeners[ path ];
+	delete this.__changed[ path ];
     }
 
     resetMutable ( path ) {
@@ -737,13 +722,19 @@ class OpenState {
 	}, {} );
     }
 
-    async get ( path ) {
+    async get ( path, opts ) {
+	if ( opts )
+	    log.trace("Get '%s' opts:", path, opts );
 	return this.state[ path ]
 	    ? this.state[path]
-	    : await this.read( path );
+	    : await this.read( path, opts );
     }
 
-    async read ( path, { allowMergeConflict = false } = {}) {
+    async read ( path, options = {}) {
+	const opts			= Object.assign( {}, {
+	    "allowMergeConflict": false,
+	    "rememberState": true,
+	}, options );
 	const metastate			= this.metastate[ path ];
 	const handler			= this.getPathHandler( path );
 
@@ -753,7 +744,7 @@ class OpenState {
 	}
 
 	metastate.reading		= true;
-	this._readings[ path ]		= handler.read( path, handler.parsePath( path ), path );
+	this._readings[ path ]		= handler.read( path, opts );
 
 	const result			= await this._readings[ path ];
 
@@ -766,16 +757,25 @@ class OpenState {
 	if ( this.state[ path ] )
 	    log.info("Result from read of path '%s' will replace current state", path );
 
-	log.trace("Saving read result for '%s':", path, result );
-	this.state[ path ]		= result;
+	if ( opts.rememberState === true ) {
+	    log.trace("Saving read result for '%s' (remember state: %s):", path, opts.rememberState, result );
+	    this.state[ path ]		= result;
+	} else {
+	    log.warn("Not saving result in state for read '%s'", path );
+	    return result;
+	}
+
+	this.emit( "*", "read", path, this.state[ path ] );
 
 	if ( metastate.changed !== false ) {
 	    log.warn("New state's mutable value cannot be merged with the current mutable.");
-	    if ( allowMergeConflict !== true )
+	    if ( opts.allowMergeConflict !== true )
 		throw new Error(`Mutable merge conflict for path '${path}'; state is updated, but mutable does not resemble the new state`);
 	}
 
 	metastate.writable && this.mutable[ path ]; // force mutable creation
+
+	// this.emit( "*", "read", path, this.state[ path ] );
 
 	log.trace("Return read result for '%s':", path, this.state[ path ] );
 	return this.state[ path ];
@@ -785,7 +785,9 @@ class OpenState {
 	log.info("Writing path '%s'", path );
 	const state			= this.state[ path ];
 	const metastate			= this.metastate[ path ];
-	const mutable			= this.mutable[ path ];
+
+	this.mutable[ path ]; // make sure it exists
+	const mutable			= this.__mutable[ path ];
 	const changed			= this.getChanged( path );
 	const handler			= this.getPathHandler( path );
 
@@ -793,6 +795,7 @@ class OpenState {
 
 	await this.validation( path );
 
+	let result;
 	try {
 	    if ( Array.isArray( intent ) )
 		intent			= intent.join("&");
@@ -801,15 +804,17 @@ class OpenState {
 		  ? this.rejections[ path ]
 		  : await handler.validate( path, intent );
 
-	    if ( rejections.length > 0 ) {
-		metastate.failed	= true;
-		throw new Error(`Validation error: ${rejections}`);
-	    }
+	    if ( rejections.length > 0 )
+		throw new Error(`Validation error: ${rejections.join('; ')}`);
 
 	    const input			= handler.createInput( clone( mutable ) );
 
 	    log.debug("Final write input for '%s':", path, input );
-	    const result		= await (
+
+	    if ( metastate.present && Object.keys(changed).length === 0 )
+		log.warn("Update for %s (%s) has no changes", path, intent );
+
+	    result			= await (
 		metastate.present
 		    ? handler.update( path, changed, intent )
 		    : handler.create( path, input, intent )
@@ -820,21 +825,27 @@ class OpenState {
 
 	    // We should be able to do a partial reset for mutable based on 'intent'
 	    delete this.mutable[ path ];
-
-	    if ( result )
-		this.state[ path ]	= result;
-	    else
-		this.read( path );
 	} catch (err) {
-	    this.errors[ path ].write	= err;
+	    metastate.failed		= true;
 
-	    if ( intent )
-		this.errors[ path ][ intent ]	= err;
+	    if ( !err.message.startsWith("Validation error") ) {
+		this.errors[ path ].write		= err;
+
+		if ( intent )
+		    this.errors[ path ][ intent ]	= err;
+	    }
 
 	    throw err;
 	} finally {
 	    metastate.writing		= false;
 	}
+
+	if ( result )
+	    this.state[ path ]		= result;
+	else
+	    await this.read( path );
+
+	return this.state[ path ];
     }
 
     async delete ( path, intent ) {
@@ -846,6 +857,7 @@ class OpenState {
 
 	try {
 	    await handler.delete( path, intent );
+	    this.purge( path );
 	} catch (err) {
 	    this.errors[ path ].write	= err;
 	    this.errors[ path ].delete	= err;
