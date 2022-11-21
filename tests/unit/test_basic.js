@@ -23,7 +23,19 @@ const EXAMPLE_POST			= {
 };
 const database				= {};
 
+function reactive ( value ) {
+    return new Proxy( value, {
+	get ( target, prop ) {
+	    if ( prop === "__reactive__" )
+		return true;
+
+	    return Reflect.get( ...arguments );
+	},
+    });
+}
+
 const openstate				= new OpenState.create({
+    reactive,
     "strict": true,
 });
 
@@ -83,6 +95,10 @@ openstate.addHandlers({
 
 function basic_tests () {
 
+    it("should check reactive wrapper", async function () {
+	expect( openstate.state.__reactive__ ).to.be.true;
+    });
+
     it("should get a valid path", async function () {
 	const path			= `post/${uuid()}`;
 	const metastate			= openstate.metastate[ path ];
@@ -133,7 +149,7 @@ function basic_tests () {
 
 	// console.log( openstate );
 
-	expect( metastate.current	).to.be.true;
+	expect( metastate.current	).to.be.false;
 	expect( metastate.present	).to.be.true;
 	expect( metastate.reading	).to.be.true;
 

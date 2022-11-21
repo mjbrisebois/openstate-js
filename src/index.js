@@ -120,7 +120,6 @@ const computed_states			= [
 
 function checkChange ( openstate, path, benchmark ) {
     const metastate			= openstate.metastate[ path ];
-    // const current			= serialize( openstate.mutable[ path ] );
 
     const before			= benchmark;
     const after				= openstate.mutable[ path ];
@@ -140,7 +139,6 @@ function checkChange ( openstate, path, benchmark ) {
 
     openstate.__changed[ path ]		= changed;
 
-    // console.log("Comparing before/after states:\n      current: %s\n    benchmark: %s", current, benchmark );
     metastate.changed			= Object.keys(changed).length > 0;
 }
 
@@ -261,7 +259,7 @@ function MutableDB ( db, openstate ) {
 		// save original state for change benchmarks
 		openstate.__change_benchmarks[ path ] = clone( mutable );
 
-		target[ path ]			= openstate.wrapReactivity( mutable );
+		target[ path ]			= openstate.addReactivityWrappers( mutable );
 
 		log.debug("Check validity of new mutable: %s", path );
 		checkValidity( openstate, path );
@@ -526,7 +524,6 @@ class Handler {
 	openstate.mutable[ path ]; // make sure it exists
 	const mutable			= openstate.__mutable[ path ];
 	const rejections		= openstate.rejections[ path ];
-	// const data			= clone( mutable );
 
 	rejections.length		= 0;
 
@@ -572,7 +569,16 @@ class OpenState {
 
 	this.strict			= !!strict;
 	this.globalDefaults		= globalDefaults;
-	this.reactive_wrapper		= reactive;
+	this.reactive_wrapper		= [];
+
+	if ( reactive !== undefined ) {
+	    if ( typeof reactive === "function" )
+		this.reactive_wrapper.push( reactive );
+	    else if ( Array.isArray( reactive ) )
+		this.reactive_wrapper.push( ...reactive );
+	    else
+		throw new TypeError(`Unusable 'reactive' option with type: ${typeof reactive}`);
+	}
 
 	if ( handlers )
 	    this.addHandlers( handlers );
@@ -645,8 +651,11 @@ class OpenState {
 	}
     }
 
-    wrapReactivity ( value ) {
-	return this.reactive_wrapper( value );
+    addReactivityWrappers ( value ) {
+	this.reactive_wrapper.forEach( reactive_wrapper => {
+	    value			= reactive_wrapper( value );
+	});
+	return value;
     }
 
     addHandlers ( handlers ) {
