@@ -164,6 +164,9 @@ function onchange ( watched_target, path, openstate, callback, target_benchmark 
 	get ( target, prop ) {
 	    const value			= target[ prop ];
 
+	    if ( value instanceof ArrayBuffer || ArrayBuffer.isView(value) )
+		return value;
+
 	    if ( typeof value === "object" && value !== null )
 		return onchange( value, path, openstate, callback, target_benchmark );
 
@@ -255,11 +258,16 @@ function MutableDB ( db, openstate ) {
 		if ( state === undefined )
 		    openstate.metastate[ path ].changed	= true;
 
+		// save original state for change benchmarks
+		openstate.__change_benchmarks[ path ] = clone( mutable );
+
 		target[ path ]			= openstate.wrapReactivity( mutable );
 
 		log.debug("Check validity of new mutable: %s", path );
 		checkValidity( openstate, path );
 	    }
+
+	    const target_benchmark		= openstate.__change_benchmarks[ path ];
 
 	    return onchange( target[ path ], path, openstate, ({ target_benchmark }) => {
 		if ( state !== undefined )
@@ -267,11 +275,12 @@ function MutableDB ( db, openstate ) {
 
 		checkValidity( openstate, path );
 		openstate.emit( path, "mutable" );
-	    });
+	    }, target_benchmark );
 	},
 	deleteProperty ( target, path ) {
 	    const metastate			= openstate.metastate[ path ];
 
+	    delete openstate.__change_benchmarks[ path ];
 	    openstate.__changed[ path ]		= [];
 	    metastate.changed			= false;
 
@@ -325,7 +334,8 @@ function StateDB ( db, openstate ) {
 	set ( target, path, value ) {
 	    const handler		= openstate.getPathHandler( path );
 
-	    if ( !value.__adapted__ && Object.isExtensible( value ) ) {
+	    if ( typeof value === "object" && value !== null
+		 && !value.__adapted__ && Object.isExtensible( value ) ) {
 		handler.adapt( value );
 		Object.defineProperty( value, "__adapted__", { value: true });
 	    }
@@ -344,6 +354,7 @@ function StateDB ( db, openstate ) {
 	    const metastate		= openstate.metastate[ path ];
 
 	    metastate.present		= true;
+	    metastate.expired		= false;
 
 	    if ( handler.readonly )
 		metastate.writable	= false;
@@ -614,6 +625,9 @@ class OpenState {
 	    "__changed": {
 		"value": {},
 	    },
+	    "__change_benchmarks": {
+		"value": {},
+	    },
 	});
 
 	if ( reactive ) {
@@ -676,6 +690,9 @@ class OpenState {
 
     getPathHandler ( path ) {
 	// console.log("getPathHandler( %s )", path );
+	if ( path === DEADEND )
+	    throw new Error(`No handler for DEADEND path`);
+
 	const handler			= this._handlers.find( handler => handler.isMatch( path ) );
 
 	if ( !handler )
@@ -743,16 +760,25 @@ class OpenState {
 	    return await this._readings[ path ];
 	}
 
+	metastate.expired		= true;
 	metastate.reading		= true;
-	this._readings[ path ]		= handler.read( path, opts );
 
-	const result			= await this._readings[ path ];
+	let result;
+	try {
+	    this._readings[ path ]	= handler.read( path, opts );
 
-	metastate.reading		= false;
-	delete this._readings[ path ];
+	    result			= await this._readings[ path ];
+	} catch ( err ) {
+	    this.errors[ path ].read	= err;
 
-	if ( !result )
-	    throw new Error(`Read returned not found: ${result}`);
+	    throw err;
+	} finally {
+	    metastate.reading		= false;
+	    delete this._readings[ path ];
+	}
+
+	if ( result === undefined )
+	    throw new Error(`Read returned not found '${path}': ${result}`);
 
 	if ( this.state[ path ] )
 	    log.info("Result from read of path '%s' will replace current state", path );
@@ -774,8 +800,6 @@ class OpenState {
 	}
 
 	metastate.writable && this.mutable[ path ]; // force mutable creation
-
-	// this.emit( "*", "read", path, this.state[ path ] );
 
 	log.trace("Return read result for '%s':", path, this.state[ path ] );
 	return this.state[ path ];
@@ -885,5 +909,7 @@ module.exports = {
     logging ( level = "trace" ) {
 	console.log("Setting log level to '%s' for Logger: %s", level, log.context );
 	log.setLevel( level );
-    }
+    },
+    deepEqual,
+    deepClone,
 };
