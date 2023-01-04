@@ -208,8 +208,11 @@ function MetastateDB ( db, openstate ) {
 
 			target[ prop ]		= value;
 
-			if ( ["present", "expired"].includes( prop ) )
-			    target.current	= target.present && !target.expired;
+			if ( ["present", "expired"].includes( prop ) ) {
+			    // Change must be made from the outside of openstate to ensure
+			    // reactivity wrappers are triggered.
+			    openstate.metastate[ path ].current	= target.present && !target.expired;
+			}
 
 			openstate.emit( path, "metastate", prop, value );
 
@@ -772,12 +775,12 @@ class OpenState {
 	metastate.expired		= true;
 	metastate.reading		= true;
 
-	// Allow CPU to update GUI after changing metastate.writing
-	await new Promise( f => setTimeout(f, 0) );
-
 	let result;
 	try {
 	    this._readings[ path ]	= handler.read( path, opts );
+
+	    // Allow CPU to update GUI after changing metastate.reading
+	    await new Promise( f => setTimeout(f, 0) );
 
 	    result			= await this._readings[ path ];
 	} catch ( err ) {
