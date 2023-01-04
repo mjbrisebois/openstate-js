@@ -772,6 +772,9 @@ class OpenState {
 	metastate.expired		= true;
 	metastate.reading		= true;
 
+	// Allow CPU to update GUI after changing metastate.writing
+	await new Promise( f => setTimeout(f, 0) );
+
 	let result;
 	try {
 	    this._readings[ path ]	= handler.read( path, opts );
@@ -825,6 +828,9 @@ class OpenState {
 	const handler			= this.getPathHandler( path );
 
 	metastate.writing		= true;
+
+	// Allow CPU to update GUI after changing metastate.writing
+	await new Promise( f => setTimeout(f, 0) );
 
 	await this.validation( path );
 
@@ -887,6 +893,9 @@ class OpenState {
 	const handler			= this.getPathHandler( path );
 
 	metastate.writing		= true;
+
+	// Allow CPU to update GUI after changing metastate.writing
+	await new Promise( f => setTimeout(f, 0) );
 
 	try {
 	    await handler.delete( path, intent );
