@@ -51,6 +51,11 @@ openstate.addHandlers({
 	async create ( input ) {
 	    input.id			= new_id();
 
+	    for ( let i=1; i <= 10; i++ ) {
+		await delay(10);
+		this.progress( i, 10 );
+	    }
+
 	    database[ input.id ]	= input;
 
 	    return Object.assign( {}, database[ input.id ] );
@@ -105,6 +110,7 @@ function basic_tests () {
 
 	expect( metastate.current	).to.be.false;
 	expect( metastate.present	).to.be.false;
+	expect( metastate.$writing	).to.be.null;
     });
 
     let post;
@@ -123,6 +129,7 @@ function basic_tests () {
 	expect( metastate.current	).to.be.false;
 	expect( metastate.present	).to.be.false;
 	expect( metastate.writing	).to.be.true;
+	expect( metastate.$writing	).to.equal( 0 );
 
 	await p;
 
@@ -131,6 +138,7 @@ function basic_tests () {
 	expect( metastate.current	).to.be.true;
 	expect( metastate.present	).to.be.true;
 	expect( metastate.writing	).to.be.false;
+	expect( metastate.$writing	).to.equal( 1 );
 
 	const data			= openstate.state[ path ];
 
@@ -145,6 +153,8 @@ function basic_tests () {
 	const path			= `post/${post.id}`;
 	const metastate			= openstate.metastate[ path ];
 
+	expect( metastate.$writing	).to.be.null;
+
 	const p				= openstate.read( path ).catch(err => console.error(err));
 
 	// console.log( openstate );
@@ -152,6 +162,7 @@ function basic_tests () {
 	expect( metastate.current	).to.be.false;
 	expect( metastate.present	).to.be.true;
 	expect( metastate.reading	).to.be.true;
+	expect( metastate.$reading	).to.equal( 0 );
 
 	// console.log( openstate );
 
@@ -162,6 +173,7 @@ function basic_tests () {
 	expect( metastate.current	).to.be.true;
 	expect( metastate.present	).to.be.true;
 	expect( metastate.reading	).to.be.false;
+	expect( metastate.$reading	).to.equal( 1 );
 
 	const data			= openstate.state[ path ];
 
@@ -195,6 +207,7 @@ function basic_tests () {
 	expect( metastate.current	).to.be.true;
 	expect( metastate.present	).to.be.true;
 	expect( metastate.writing	).to.be.true;
+	expect( metastate.$writing	).to.equal( 0 );
 
 	// console.log( openstate );
 
@@ -205,6 +218,7 @@ function basic_tests () {
 	expect( metastate.current	).to.be.true;
 	expect( metastate.present	).to.be.true;
 	expect( metastate.writing	).to.be.false;
+	expect( metastate.$writing	).to.equal( 1 );
 
 	const data			= openstate.state[ path ];
 

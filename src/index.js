@@ -103,7 +103,9 @@ const MetastateProperties		= {
 
     // verbs
     "reading":		false,
+    "$reading":		null,
     "writing":		false,
+    "$writing":		null,
 
     // optimizations
     "cached":		false, // stashed
@@ -270,6 +272,9 @@ function MutableDB ( db, openstate ) {
 
 	    const target_benchmark		= openstate.__change_benchmarks[ path ];
 
+	    if ( typeof target[ path ] !== "object" || target[ path ] === null )
+		return target[ path ];
+
 	    return onchange( target[ path ], path, openstate, ({ target_benchmark }) => {
 		if ( state !== undefined )
 		    checkChange( openstate, path, target_benchmark );
@@ -402,7 +407,7 @@ class Handler {
 	this._delete			= config.delete;
     }
 
-    scoped_this_arg ( path ) {
+    scoped_this_arg ( path, progress_prop ) {
 	const openstate			= this.context;
 	return {
 	    openstate,
@@ -417,34 +422,56 @@ class Handler {
 	    get mutable () {
 		return openstate.mutable[ path ];
 	    },
+	    progress ( ...args ) {
+		if ( !progress_prop )
+		    return;
+
+		if ( args.length > 2 )
+		    throw new TypeError(`Too many arguments for progress input; expects 1-2 args`);
+		if ( args.length === 2 && args[0] > args[1] )
+		    throw new Error(`Progress position cannot be greater than progress steps; ${args[0]}/${args[1]}`);
+
+		const percentage	= args.length === 2
+		      ? args[0] / args[1]
+		      : args[0];
+
+		console.log("Setting progress of %s: %s%", path, Math.ceil(percentage * 100) )
+		openstate.metastate[ path ][ progress_prop ] = percentage;
+	    },
 	};
     }
 
     async read ( path, opts ) {
-	return await this._read.call(
-	    this.scoped_this_arg( path ),
+	let call_scope		= this.scoped_this_arg( path, "$reading" );
+	let result		= await this._read.call(
+	    call_scope,
 	    this.parsePath( path ), opts
 	);
+	return result;
     }
 
     async create ( path, input, intent ) {
 	if ( this._create === undefined )
 	    throw new TypeError(`a create() method has not been defined for path type ${this.name}`);
 
-	return await this._create.call(
-	    this.scoped_this_arg( path ),
+	let call_scope		= this.scoped_this_arg( path, "$writing" );
+	let result		= await this._create.call(
+	    call_scope,
 	    input, intent
 	);
+	return result;
     }
 
     async update ( path, changed, intent ) {
 	if ( this._update === undefined )
 	    throw new TypeError(`an update() method has not been defined for path type ${this.name}`);
 
-	return await this._update.call(
-	    this.scoped_this_arg( path ),
+	const call_scope	= this.scoped_this_arg( path, "$writing" );
+	const result		= await this._update.call(
+	    call_scope,
 	    this.parsePath( path ), changed, intent
 	);
+	return result;
     }
 
     async delete ( path, intent ) {
@@ -774,6 +801,7 @@ class OpenState {
 
 	metastate.expired		= true;
 	metastate.reading		= true;
+	metastate.$reading		= 0;
 
 	let result;
 	try {
@@ -789,6 +817,7 @@ class OpenState {
 	    throw err;
 	} finally {
 	    metastate.reading		= false;
+	    metastate.$reading		= 1;
 	    delete this._readings[ path ];
 	}
 
@@ -816,6 +845,10 @@ class OpenState {
 
 	metastate.writable && this.mutable[ path ]; // force mutable creation
 
+	setTimeout(() => {
+	    metastate.$reading		= null;
+	}, 0 );
+
 	log.trace("Return read result for '%s':", path, this.state[ path ] );
 	return this.state[ path ];
     }
@@ -831,6 +864,7 @@ class OpenState {
 	const handler			= this.getPathHandler( path );
 
 	metastate.writing		= true;
+	metastate.$writing		= 0;
 
 	// Allow CPU to update GUI after changing metastate.writing
 	await new Promise( f => setTimeout(f, 0) );
@@ -880,6 +914,7 @@ class OpenState {
 	    throw err;
 	} finally {
 	    metastate.writing		= false;
+	    metastate.$writing		= 1;
 	}
 
 	if ( result )
@@ -887,6 +922,9 @@ class OpenState {
 	else
 	    await this.read( path );
 
+	setTimeout(() => {
+	    metastate.$writing		= null;
+	}, 0 );
 	return this.state[ path ];
     }
 
